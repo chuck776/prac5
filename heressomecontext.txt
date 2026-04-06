@@ -2,8 +2,17 @@ dc= COS332PRAC5(dns domain name)
 o=COS332NETWORKS
 pass= butter
 
+//our files of Automobiles
+nano automobiles.ldif
+ldapadd -x -H ldap://localhost -D "cn=admin,dc=COS332PRAC5,dc=com" -W -f automobiles.ldif
 
-
+//config
+sudo nano /etc/phpldapadmin/config.php
+//variables to look out for 
+$servers->setValue('server','host','127.0.0.1');
+$servers->setValue('server','port',389);
+$servers->setValue('server','base',array('dc=COS332PRAC5,dc=com'));
+$servers->setValue('login','bind_id','cn=admin,dc=COS332PRAC5,dc=com');
 
 
 
