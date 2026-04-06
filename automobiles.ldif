@@ -1,0 +1,41 @@
+# First Create the Automobiles organisational unit, extend later optionally
+
+dn: ou=Automobiles,dc=COS332PRAC5,dc=com
+objectClass: top
+objectClass: organizationalUnit
+ou: Automobiles
+
+# Ferrari SF90
+dn: cn=Ferrari SF90,ou=Automobiles,dc=COS332PRAC5,dc=com
+objectClass: top
+objectClass: device
+cn: Ferrari SF90
+description: 340
+
+# Bugatti Chiron
+dn: cn=Bugatti Chiron,ou=Automobiles,dc=COS332PRAC5,dc=com
+objectClass: top
+objectClass: device
+cn: Bugatti Chiron
+description: 420
+
+# Lamborghini Huracan
+dn: cn=Lamborghini Huracan,ou=Automobiles,dc=COS332PRAC5,dc=com
+objectClass: top
+objectClass: device
+cn: Lamborghini Huracan
+description: 325
+
+# Porsche 911 GT3
+dn: cn=Porsche 911 GT3,ou=Automobiles,dc=COS332PRAC5,dc=com
+objectClass: top
+objectClass: device
+cn: Porsche 911 GT3
+description: 318
+
+# McLaren P1
+dn: cn=McLaren P1,ou=Automobiles,dc=COS332PRAC5,dc=com
+objectClass: top
+objectClass: device
+cn: McLaren P1
+description: 350

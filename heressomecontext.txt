@@ -1,0 +1,52 @@
+dc= COS332PRAC5(dns domain name)
+o=COS332NETWORKS
+pass= butter
+
+
+
+
+
+
+
+We'll go with Automobiles as our OU. The DIT will look like:
+dc=practical,dc=com
+└── ou=Automobiles
+    ├── cn=Ferrari SF90
+    │   └── description: 340
+    ├── cn=Bugatti Chiron
+    │   └── description: 420
+    └── cn=Lamborghini Huracan
+        └── description: 325
+
+LDAPMessage ::= SEQUENCE {
+    messageID   MessageID,
+    protocolOp  CHOICE {
+        bindRequest     BindRequest,
+        bindResponse    BindResponse,
+        searchRequest   SearchRequest,
+        ...
+    }
+}        
+
+30          -- Tag: SEQUENCE
+[length]    -- Total length of what follows
+02 01 [id]  -- INTEGER: message ID
+[op tag]    -- Tag identifying which operation
+[op length] -- Length of operation data
+[op data]   -- The actual operation data
+
+0x02 — INTEGER
+0x04 — OCTET STRING (used for strings in LDAP)
+0x0A — ENUMERATED
+0x30 — SEQUENCE
+0x01 — BOOLEAN
+
+0x60 — Bind Request        (APPLICATION 0, constructed)
+0x61 — Bind Response       (APPLICATION 1)
+0x63 — Search Request      (APPLICATION 3, constructed)
+0x64 — Search Result Entry (APPLICATION 4)
+0x65 — Search Result Done  (APPLICATION 5)
+0x42 — Unbind Request      (APPLICATION 2, primitive)
+
+04 [len] [DN bytes]       -- the bind DN
+    80 [len] [password bytes] -- the password
