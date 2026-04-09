@@ -41,40 +41,33 @@ public class BerDecoder {
     }
 
     // ----------------------------------------------------------------
-    // PARSED ATTRIBUTE — holds one attribute name and its values
+    // PARSED ATTRIBUTE
+    //this class represents a parsed LDAP attribute, containing the attribute name and a list of values. It provides a toString method for easy display of the attribute's contents.
     // ----------------------------------------------------------------
     public static class LdapAttribute {
         public String name;
         public List<String> values = new ArrayList<>();
 
-        public LdapAttribute(String name) {
-            this.name = name;
-        }
+        public LdapAttribute(String name) { this.name = name; }
 
         @Override
-        public String toString() {
-            return name + ": " + values;
-        }
+        public String toString() { return name + ": " + values; }
     }
 
     // ----------------------------------------------------------------
-    // PARSED ENTRY — holds a DN and its attributes
+    // PARSED ENTRY
+    // this class represents a parsed LDAP entry, containing the distinguished name (DN) and a list of attributes. It provides a method to retrieve the value of a specific attribute by name, and a toString method for easy display of the entry's contents.
     // ----------------------------------------------------------------
     public static class LdapEntry {
         public String dn;
         public List<LdapAttribute> attributes = new ArrayList<>();
 
-        public LdapEntry(String dn) {
-            this.dn = dn;
-        }
+        public LdapEntry(String dn) { this.dn = dn; }
 
-        // Find a specific attribute by name (case insensitive)
         public String getAttributeValue(String attrName) {
             for (LdapAttribute attr : attributes) {
                 if (attr.name.equalsIgnoreCase(attrName)) {
-                    if (!attr.values.isEmpty()) {
-                        return attr.values.get(0);
-                    }
+                    if (!attr.values.isEmpty()) return attr.values.get(0);
                 }
             }
             return null;
@@ -83,10 +76,10 @@ public class BerDecoder {
         @Override
         public String toString() {
             StringBuilder sb = new StringBuilder();
-            sb.append("DN: " + dn + "\n");
+            sb.append("DN: ").append(dn).append("\n");
             for (LdapAttribute attr : attributes) {
                 for (String val : attr.values) {
-                    sb.append("  " + attr.name + ": " + val + "\n");
+                    sb.append("  ").append(attr.name).append(": ").append(val).append("\n");
                 }
             }
             return sb.toString();
@@ -94,7 +87,8 @@ public class BerDecoder {
     }
 
     // ----------------------------------------------------------------
-    // PARSED LDAP RESPONSE — holds the full decoded response
+    // PARSED LDAP RESPONSE
+    // parsed LDAP response containing the message ID, response tag, result code, matched DN, error message, and any entries returned in a search response. It also includes helper methods to check the type of response (e.g., is it a search entry, search done, bind response, etc.) based on the response tag. This class serves as a structured representation of the decoded LDAP response for easier access and manipulation in the application.
     // ----------------------------------------------------------------
     public static class LdapResponse {
         public int messageId;
@@ -104,36 +98,28 @@ public class BerDecoder {
         public String errorMessage = "";
         public List<LdapEntry> entries = new ArrayList<>();
 
-        public boolean isSuccess() {
-            return resultCode == 0;
-        }
+        public boolean isSuccess()      { return resultCode == 0; }
+        public boolean isSearchEntry()  { return responseTag == BerEncoder.TAG_SEARCH_ENTRY; }
+        public boolean isSearchDone()   { return responseTag == BerEncoder.TAG_SEARCH_DONE; }
+        public boolean isBindResponse() { return responseTag == BerEncoder.TAG_BIND_RESPONSE; }
 
-        public boolean isSearchEntry() {
-            return responseTag == BerEncoder.TAG_SEARCH_ENTRY;
-        }
-
-        public boolean isSearchDone() {
-            return responseTag == BerEncoder.TAG_SEARCH_DONE;
-        }
-
-        public boolean isBindResponse() {
-            return responseTag == BerEncoder.TAG_BIND_RESPONSE;
-        }
+        // RFC 4511 Section 4.7 — AddResponse
+        public boolean isAddResponse()    { return responseTag == BerEncoder.TAG_ADD_RESPONSE; }
+        // RFC 4511 Section 4.8 — DelResponse
+        public boolean isDeleteResponse() { return responseTag == BerEncoder.TAG_DELETE_RESPONSE; }
+        // RFC 4511 Section 4.6 — ModifyResponse
+        public boolean isModifyResponse() { return responseTag == BerEncoder.TAG_MODIFY_RESPONSE; }
     }
 
     // ----------------------------------------------------------------
-    // READ LENGTH FROM BER ENCODED BYTES
-    // Returns the length value
-    // Updates pos[] array (used as a mutable integer reference)
+    // READ LENGTH
+    //this method reads the length of a BER-encoded element from the byte array. It handles both short form (where the length is less than 128 and fits in one byte) and long form (where the first byte indicates how many subsequent bytes are used to represent the length). The method updates the position index as it reads bytes from the array.
     // ----------------------------------------------------------------
     public static int readLength(byte[] data, int[] pos) {
         int firstByte = data[pos[0]++] & 0xFF;
-
         if (firstByte < 128) {
-            // Short form — length is directly the byte value
             return firstByte;
         } else {
-            // Long form — first byte tells us how many bytes encode the length
             int numBytes = firstByte & 0x7F;
             int length = 0;
             for (int i = 0; i < numBytes; i++) {
@@ -143,16 +129,10 @@ public class BerDecoder {
         }
     }
 
-    // ----------------------------------------------------------------
-    // READ TAG FROM BER ENCODED BYTES
-    // ----------------------------------------------------------------
     public static int readTag(byte[] data, int[] pos) {
         return data[pos[0]++] & 0xFF;
     }
 
-    // ----------------------------------------------------------------
-    // READ BYTES AS STRING
-    // ----------------------------------------------------------------
     public static String readString(byte[] data, int offset, int length) {
         try {
             return new String(data, offset, length, "UTF-8");
@@ -161,9 +141,6 @@ public class BerDecoder {
         }
     }
 
-    // ----------------------------------------------------------------
-    // READ INTEGER VALUE FROM BER BYTES
-    // ----------------------------------------------------------------
     public static int readInteger(byte[] data, int offset, int length) {
         int value = 0;
         for (int i = 0; i < length; i++) {
@@ -174,14 +151,15 @@ public class BerDecoder {
 
     // ----------------------------------------------------------------
     // DECODE A COMPLETE LDAP RESPONSE PACKET
-    // RFC 4511 Section 4.1.1
     // LDAPMessage ::= SEQUENCE { messageID, protocolOp }
+    // function to decode a complete LDAP response packet from a byte array. It first reads the outer SEQUENCE tag and length, then extracts the message ID and protocol operation.
+    //  Based on the protocol operation tag, it determines the type of response (e.g., BindResponse, SearchResultEntry, SearchResultDone) and calls the appropriate decoding function to parse the contents of the response. 
+    // The decoded information is stored in an LdapResponse object, which can be used for further processing or display.
     // ----------------------------------------------------------------
     public static LdapResponse decode(byte[] data) {
         LdapResponse response = new LdapResponse();
         int[] pos = { 0 };
 
-        // Read outer SEQUENCE tag
         int outerTag = readTag(data, pos);
         if (outerTag != BerEncoder.TAG_SEQUENCE) {
             System.err.println("ERROR: Expected SEQUENCE tag 0x30, got: " +
@@ -189,17 +167,15 @@ public class BerDecoder {
             return response;
         }
 
-        // Read outer SEQUENCE length
         int outerLength = readLength(data, pos);
 
-        // Read messageID
-        // messageID ::= INTEGER
+        // messageID
         int msgIdTag    = readTag(data, pos);
         int msgIdLength = readLength(data, pos);
         response.messageId = readInteger(data, pos[0], msgIdLength);
         pos[0] += msgIdLength;
 
-        // Read protocol operation tag
+        // protocol operation
         response.responseTag = readTag(data, pos);
         int opLength = readLength(data, pos);
         int opStart  = pos[0];
@@ -208,13 +184,21 @@ public class BerDecoder {
             String.format("0x%02X", response.responseTag) +
             " messageId: " + response.messageId);
 
-        // Decode based on response type
         if (response.isBindResponse()) {
-            decodeBindResponse(data, pos, response);
+            decodeLdapResult(data, pos, response);
         } else if (response.isSearchEntry()) {
             decodeSearchEntry(data, pos, opStart, opLength, response);
         } else if (response.isSearchDone()) {
-            decodeSearchDone(data, pos, response);
+            decodeLdapResult(data, pos, response);
+        } else if (response.isAddResponse()) {
+            // AddResponse ::= [APPLICATION 9] LDAPResult
+            decodeLdapResult(data, pos, response);
+        } else if (response.isDeleteResponse()) {
+            // DelResponse ::= [APPLICATION 11] LDAPResult
+            decodeLdapResult(data, pos, response);
+        } else if (response.isModifyResponse()) {
+            // ModifyResponse ::= [APPLICATION 7] LDAPResult
+            decodeLdapResult(data, pos, response);
         } else {
             System.out.println("DEBUG: Unknown response tag: " +
                 String.format("0x%02X", response.responseTag));
@@ -224,32 +208,15 @@ public class BerDecoder {
     }
 
     // ----------------------------------------------------------------
-    // DECODE BIND RESPONSE (RFC 4511 Section 4.2.2)
-    // BindResponse ::= [APPLICATION 1] SEQUENCE {
-    //     COMPONENTS OF LDAPResult
-    // }
-    // LDAPResult ::= SEQUENCE {
-    //     resultCode  ENUMERATED,
-    //     matchedDN   LDAPDN,
-    //     errorMessage LDAPString
-    // }
-    // ----------------------------------------------------------------
-    private static void decodeBindResponse(byte[] data, int[] pos,
-                                           LdapResponse response) {
-        decodeLdapResult(data, pos, response);
-    }
-
-    // ----------------------------------------------------------------
     // DECODE SEARCH RESULT ENTRY (RFC 4511 Section 4.5.2)
     // SearchResultEntry ::= [APPLICATION 4] SEQUENCE {
     //     objectName LDAPDN,
-    //     attributes PartialAttributeList
-    // }
+    //     attributes PartialAttributeList }
+    // this also decodes the DN and attributes of a search result entry. It reads the objectName (DN) as a string and then iterates through the attributes, decoding each attribute's name and values. The decoded entry is stored in the LdapResponse object for later use or display.
     // ----------------------------------------------------------------
     private static void decodeSearchEntry(byte[] data, int[] pos,
                                           int opStart, int opLength,
                                           LdapResponse response) {
-        // Read objectName (the DN of this entry)
         int dnTag    = readTag(data, pos);
         int dnLength = readLength(data, pos);
         String dn    = readString(data, pos[0], dnLength);
@@ -257,18 +224,15 @@ public class BerDecoder {
 
         LdapEntry entry = new LdapEntry(dn);
 
-        // Read PartialAttributeList — SEQUENCE OF PartialAttribute
         int attrListTag    = readTag(data, pos);
         int attrListLength = readLength(data, pos);
         int attrListEnd    = pos[0] + attrListLength;
 
-        // Each PartialAttribute ::= SEQUENCE { type, vals SET OF value }
         while (pos[0] < attrListEnd) {
             int attrSeqTag    = readTag(data, pos);
             int attrSeqLength = readLength(data, pos);
             int attrSeqEnd    = pos[0] + attrSeqLength;
 
-            // Read attribute type (name)
             int typeTag    = readTag(data, pos);
             int typeLength = readLength(data, pos);
             String attrName = readString(data, pos[0], typeLength);
@@ -276,7 +240,6 @@ public class BerDecoder {
 
             LdapAttribute attribute = new LdapAttribute(attrName);
 
-            // Read attribute values SET
             int setTag    = readTag(data, pos);
             int setLength = readLength(data, pos);
             int setEnd    = pos[0] + setLength;
@@ -297,38 +260,28 @@ public class BerDecoder {
     }
 
     // ----------------------------------------------------------------
-    // DECODE SEARCH RESULT DONE (RFC 4511 Section 4.5.2)
-    // SearchResultDone ::= [APPLICATION 5] LDAPResult
-    // ----------------------------------------------------------------
-    private static void decodeSearchDone(byte[] data, int[] pos,
-                                         LdapResponse response) {
-        decodeLdapResult(data, pos, response);
-    }
-
-    // ----------------------------------------------------------------
     // DECODE LDAPResult (RFC 4511 Section 4.1.9)
     // LDAPResult ::= SEQUENCE {
     //     resultCode   ENUMERATED,
     //     matchedDN    LDAPDN,
     //     errorMessage LDAPString,
-    //     referral     [3] Referral OPTIONAL
-    // }
+    //     referral     [3] Referral OPTIONAL }
+    // Used by: BindResponse, SearchResultDone, AddResponse,
+    //          DelResponse, ModifyResponse
+    // this also decodes the result code, matched DN, and error message from the response. It reads the result code as an enumerated value, the matched DN as a string, and the error message as a string. The decoded values are stored in the LdapResponse object for later use or display.
     // ----------------------------------------------------------------
     private static void decodeLdapResult(byte[] data, int[] pos,
                                          LdapResponse response) {
-        // Result code
         int resultCodeTag    = readTag(data, pos);
         int resultCodeLength = readLength(data, pos);
         response.resultCode  = readInteger(data, pos[0], resultCodeLength);
         pos[0] += resultCodeLength;
 
-        // Matched DN
         int matchedDNTag    = readTag(data, pos);
         int matchedDNLength = readLength(data, pos);
         response.matchedDN  = readString(data, pos[0], matchedDNLength);
         pos[0] += matchedDNLength;
 
-        // Error message
         int errorMsgTag    = readTag(data, pos);
         int errorMsgLength = readLength(data, pos);
         response.errorMessage = readString(data, pos[0], errorMsgLength);
@@ -336,18 +289,17 @@ public class BerDecoder {
 
         System.out.println("DEBUG: Result code: " + response.resultCode +
             " (" + getResultCodeMeaning(response.resultCode) + ")" +
-            (response.errorMessage.isEmpty() ? "" :
-             " - " + response.errorMessage));
+            (response.errorMessage.isEmpty() ? "" : " - " + response.errorMessage));
     }
 
     // ----------------------------------------------------------------
-    // DEBUG HELPER — print decoded response summary
+    // DEBUG HELPER
+    // function to print the contents of a parsed LDAP response in a human-readable format. This is useful for debugging and verifying that the decoding process is working correctly. It displays the message ID, response tag, result code (with meaning), matched DN, error message, and any entries returned in a search response.
     // ----------------------------------------------------------------
     public static void printResponse(LdapResponse response) {
         System.out.println("=== LDAP Response ===");
         System.out.println("Message ID : " + response.messageId);
-        System.out.println("Tag        : " +
-            String.format("0x%02X", response.responseTag));
+        System.out.println("Tag        : " + String.format("0x%02X", response.responseTag));
         if (response.resultCode >= 0) {
             System.out.println("Result     : " + response.resultCode +
                 " (" + getResultCodeMeaning(response.resultCode) + ")");

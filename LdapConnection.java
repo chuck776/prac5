@@ -1,6 +1,8 @@
 import java.io.*;
 import java.net.*;
-
+import java.util.List;
+import java.util.ArrayList;
+// This class manages the LDAP connection and implements core operations like bind, search, add, delete, and modify.
 public class LdapConnection {
 
     private Socket socket;
@@ -8,10 +10,11 @@ public class LdapConnection {
     private OutputStream out;
     private String host;
     private int    port;
-    private int    messageId = 1; // RFC 4511: messageID must be unique per session
+    private int    messageId = 1; // RFC 4511: messageID must be non-zero and unique per session
 
     // ----------------------------------------------------------------
     // CONSTRUCTOR
+    // initializes host and port but does not connect yet
     // ----------------------------------------------------------------
     public LdapConnection(String host, int port) {
         this.host = host;
@@ -19,8 +22,8 @@ public class LdapConnection {
     }
 
     // ----------------------------------------------------------------
-    // CONNECT TO LDAP SERVER
-    // Opens raw TCP socket to port 389
+    // CONNECT
+    // simply opens a TCP socket to the LDAP server and initializes input/output streams
     // ----------------------------------------------------------------
     public void connect() throws IOException {
         System.out.println("Connecting to LDAP server " + host + ":" + port + "...");
@@ -31,9 +34,10 @@ public class LdapConnection {
     }
 
     // ----------------------------------------------------------------
-    // DISCONNECT FROM LDAP SERVER
-    // Sends unbind request then closes socket
-    // RFC 4511 Section 4.3 — UnbindRequest
+    // DISCONNECT — sends UnbindRequest then closes socket
+    // RFC 4511 Section 4.3
+    // RFC 4511: "The client initiates the unbind operation by sending an UnbindRequest to the server. 
+    // The server does not send a response to an UnbindRequest. The client closes
     // ----------------------------------------------------------------
     public void disconnect() throws IOException {
         if (socket != null && !socket.isClosed()) {
@@ -46,9 +50,8 @@ public class LdapConnection {
     }
 
     // ----------------------------------------------------------------
-    // BIND — authenticate to the LDAP server
-    // RFC 4511 Section 4.2
-    // Returns true if bind was successful
+    // BIND (RFC 4511 Section 4.2)
+    // This sends a simple bind request with the provided DN and password.
     // ----------------------------------------------------------------
     public boolean bind(String bindDN, String password) throws IOException {
         int msgId = nextMessageId();
@@ -57,16 +60,11 @@ public class LdapConnection {
             (bindDN.isEmpty() ? "anonymous" : bindDN) + ")...");
 
         byte[] bindRequest = BerEncoder.buildBindRequest(msgId, bindDN, password);
-
-        System.out.println("DEBUG: Bind request bytes: " +
-            BerEncoder.toHex(bindRequest));
-
+        System.out.println("DEBUG: Bind request bytes: " + BerEncoder.toHex(bindRequest));
         sendPacket(bindRequest);
 
-        // Read and decode response
         byte[] response = readPacket();
-        System.out.println("DEBUG: Bind response bytes: " +
-            BerEncoder.toHex(response));
+        System.out.println("DEBUG: Bind response bytes: " + BerEncoder.toHex(response));
 
         BerDecoder.LdapResponse decoded = BerDecoder.decode(response);
         BerDecoder.printResponse(decoded);
@@ -81,83 +79,189 @@ public class LdapConnection {
         }
     }
 
-    // ----------------------------------------------------------------
-    // ANONYMOUS BIND
-    // Binds with empty DN and empty password
-    // RFC 4511 Section 4.2 — simple authentication with empty credentials
-    // ----------------------------------------------------------------
     public boolean anonymousBind() throws IOException {
         int msgId = nextMessageId();
-
         System.out.println("Sending anonymous bind request...");
-
         byte[] bindRequest = BerEncoder.buildAnonymousBindRequest(msgId);
-
-        System.out.println("DEBUG: Anonymous bind request bytes: " +
-            BerEncoder.toHex(bindRequest));
-
+        System.out.println("DEBUG: Anonymous bind request bytes: " + BerEncoder.toHex(bindRequest));
         sendPacket(bindRequest);
-
         byte[] response = readPacket();
-        System.out.println("DEBUG: Bind response bytes: " +
-            BerEncoder.toHex(response));
-
+        System.out.println("DEBUG: Bind response bytes: " + BerEncoder.toHex(response));
         BerDecoder.LdapResponse decoded = BerDecoder.decode(response);
         BerDecoder.printResponse(decoded);
-
         return decoded.isBindResponse() && decoded.isSuccess();
     }
 
     // ----------------------------------------------------------------
-    // SEARCH — query the LDAP directory
-    // RFC 4511 Section 4.5
-    // Returns list of matching entries
+    // SEARCH — equality match filter (RFC 4511 Section 4.5)
+    // searches for entries under baseDN where searchAttribute equals searchValue
     // ----------------------------------------------------------------
-    public java.util.List<BerDecoder.LdapEntry> search(
-            String baseDN,
-            String searchAttribute,
-            String searchValue) throws IOException {
-
+    public List<BerDecoder.LdapEntry> search(String baseDN,
+                                              String searchAttribute,
+                                              String searchValue) throws IOException {
         int msgId = nextMessageId();
 
         System.out.println("Sending search request...");
         System.out.println("  Base DN   : " + baseDN);
-        System.out.println("  Filter    : (" + searchAttribute +
-                           "=" + searchValue + ")");
+        System.out.println("  Filter    : (" + searchAttribute + "=" + searchValue + ")");
 
         byte[] searchRequest = BerEncoder.buildSearchRequest(
             msgId, baseDN, searchAttribute, searchValue);
-
-        System.out.println("DEBUG: Search request bytes: " +
-            BerEncoder.toHex(searchRequest));
-
+        System.out.println("DEBUG: Search request bytes: " + BerEncoder.toHex(searchRequest));
         sendPacket(searchRequest);
 
-        // Collect all responses until SearchResultDone
-        // RFC 4511: server sends zero or more SearchResultEntry
-        // followed by exactly one SearchResultDone
-        java.util.List<BerDecoder.LdapEntry> entries = new java.util.ArrayList<>();
+        return collectSearchResults();
+    }
+
+    // ----------------------------------------------------------------
+    // SEARCH — greaterOrEqual filter (RFC 4511 Section 4.5.1)
+    // Used for server-side speed >= threshold queries.
+    // The LDAP greaterOrEqual filter does a lexicographic comparison
+    // on the stored string values, so speeds must be zero-padded to
+    // the same width (e.g. "300") for correct numeric ordering, OR
+    // we accept that the server handles numeric ordering via the
+    // INTEGER syntax on the 'description' attribute.
+    // For OpenLDAP with 'description' as caseIgnoreString, the
+    // comparison is lexicographic — we document this for the demo.
+    // ----------------------------------------------------------------
+    public List<BerDecoder.LdapEntry> searchGreaterOrEqual(String baseDN,
+                                                            String attribute,
+                                                            String value) throws IOException {
+        int msgId = nextMessageId();
+
+        System.out.println("Sending greaterOrEqual search request...");
+        System.out.println("  Base DN   : " + baseDN);
+        System.out.println("  Filter    : (" + attribute + ">=" + value + ")");
+
+        byte[] searchRequest = BerEncoder.buildSearchRequestGreaterOrEqual(
+            msgId, baseDN, attribute, value);
+        System.out.println("DEBUG: Search request bytes: " + BerEncoder.toHex(searchRequest));
+        sendPacket(searchRequest);
+
+        return collectSearchResults();
+    }
+
+    // ----------------------------------------------------------------
+    // ADD — creates a new LDAP entry (RFC 4511 Section 4.7)
+    // attributes: each String[] is { attrName, val1, val2, ... }
+    //this method takes the entry DN and a 2D array of attributes, where each inner array contains the attribute name followed by its values. This allows us to add entries with multiple attributes and multiple values per attribute.
+    // ----------------------------------------------------------------
+    public boolean add(String entryDN, String[][] attributes) throws IOException {
+        int msgId = nextMessageId();
+
+        System.out.println("Sending add request for DN: " + entryDN);
+        byte[] addRequest = BerEncoder.buildAddRequest(msgId, entryDN, attributes);
+        System.out.println("DEBUG: Add request bytes: " + BerEncoder.toHex(addRequest));
+        sendPacket(addRequest);
+
+        byte[] responseBytes = readPacket();
+        System.out.println("DEBUG: Add response bytes: " + BerEncoder.toHex(responseBytes));
+
+        BerDecoder.LdapResponse response = BerDecoder.decode(responseBytes);
+        BerDecoder.printResponse(response);
+
+        if (response.isAddResponse() && response.isSuccess()) {
+            System.out.println("Add successful.");
+            return true;
+        } else {
+            System.out.println("Add failed: " +
+                BerDecoder.getResultCodeMeaning(response.resultCode) +
+                (response.errorMessage.isEmpty() ? "" : " — " + response.errorMessage));
+            return false;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // DELETE — removes an LDAP entry (RFC 4511 Section 4.8)
+    //this only takes the entry DN since delete doesn't need attribute values
+    // ----------------------------------------------------------------
+    public boolean delete(String entryDN) throws IOException {
+        int msgId = nextMessageId();
+
+        System.out.println("Sending delete request for DN: " + entryDN);
+        byte[] delRequest = BerEncoder.buildDeleteRequest(msgId, entryDN);
+        System.out.println("DEBUG: Delete request bytes: " + BerEncoder.toHex(delRequest));
+        sendPacket(delRequest);
+
+        byte[] responseBytes = readPacket();
+        System.out.println("DEBUG: Delete response bytes: " + BerEncoder.toHex(responseBytes));
+
+        BerDecoder.LdapResponse response = BerDecoder.decode(responseBytes);
+        BerDecoder.printResponse(response);
+
+        if (response.isDeleteResponse() && response.isSuccess()) {
+            System.out.println("Delete successful.");
+            return true;
+        } else {
+            System.out.println("Delete failed: " +
+                BerDecoder.getResultCodeMeaning(response.resultCode) +
+                (response.errorMessage.isEmpty() ? "" : " — " + response.errorMessage));
+            return false;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // MODIFY — replaces an attribute value on an existing entry
+    // (RFC 4511 Section 4.6)
+    // operation: 0=add, 1=delete, 2=replace
+    // Uses MODIFY_OP_REPLACE so the new value overwrites the old one.
+    // ----------------------------------------------------------------
+    public boolean modify(String entryDN,
+                          int operation,
+                          String attrName,
+                          String[] values) throws IOException {
+        int msgId = nextMessageId();
+
+        System.out.println("Sending modify request for DN: " + entryDN);
+        System.out.println("  Operation : " + operationName(operation));
+        System.out.println("  Attribute : " + attrName);
+
+        byte[] modRequest = BerEncoder.buildModifyRequest(
+            msgId, entryDN, operation, attrName, values);
+        System.out.println("DEBUG: Modify request bytes: " + BerEncoder.toHex(modRequest));
+        sendPacket(modRequest);
+
+        byte[] responseBytes = readPacket();
+        System.out.println("DEBUG: Modify response bytes: " + BerEncoder.toHex(responseBytes));
+
+        BerDecoder.LdapResponse response = BerDecoder.decode(responseBytes);
+        BerDecoder.printResponse(response);
+
+        if (response.isModifyResponse() && response.isSuccess()) {
+            System.out.println("Modify successful.");
+            return true;
+        } else {
+            System.out.println("Modify failed: " +
+                BerDecoder.getResultCodeMeaning(response.resultCode) +
+                (response.errorMessage.isEmpty() ? "" : " — " + response.errorMessage));
+            return false;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // COLLECT SEARCH RESULTS
+    // Reads packets until SearchResultDone (RFC 4511 Section 4.5.2)
+    // collects SearchResultEntry responses into a list and returns it.
+    // ----------------------------------------------------------------
+    private List<BerDecoder.LdapEntry> collectSearchResults() throws IOException {
+        List<BerDecoder.LdapEntry> entries = new ArrayList<>();
 
         while (true) {
             byte[] responseBytes = readPacket();
-            System.out.println("DEBUG: Response bytes: " +
-                BerEncoder.toHex(responseBytes));
+            System.out.println("DEBUG: Response bytes: " + BerEncoder.toHex(responseBytes));
 
             BerDecoder.LdapResponse response = BerDecoder.decode(responseBytes);
             BerDecoder.printResponse(response);
 
             if (response.isSearchEntry()) {
-                // Add all entries from this response
                 entries.addAll(response.entries);
             } else if (response.isSearchDone()) {
-                // Search is complete
                 if (!response.isSuccess() && response.resultCode != 0) {
                     System.out.println("Search completed with result: " +
                         BerDecoder.getResultCodeMeaning(response.resultCode));
                 }
                 break;
             } else {
-                // Unexpected response — log and break
                 System.out.println("Unexpected response tag: " +
                     String.format("0x%02X", response.responseTag));
                 break;
@@ -168,8 +272,9 @@ public class LdapConnection {
     }
 
     // ----------------------------------------------------------------
-    // SEND A PACKET TO THE LDAP SERVER
-    // Writes raw bytes to the socket output stream
+    // SEND PACKET
+    // This sends the full LDAP message bytes to the server. 
+    // The caller is responsible
     // ----------------------------------------------------------------
     private void sendPacket(byte[] packet) throws IOException {
         out.write(packet);
@@ -177,24 +282,20 @@ public class LdapConnection {
     }
 
     // ----------------------------------------------------------------
-    // READ A COMPLETE LDAP PACKET FROM THE SERVER
-    // RFC 4511: each message is a BER SEQUENCE
-    // We read the tag, then the length, then the value bytes
+    // READ A COMPLETE LDAP PACKET
+    // RFC 4511: each message is a BER SEQUENCE read tag, length, value
+    // this handles both short and long form lengths and ensures we read the full content
     // ----------------------------------------------------------------
     private byte[] readPacket() throws IOException {
-        // Read tag byte (should be 0x30 for SEQUENCE)
         int tag = in.read();
         if (tag == -1) throw new IOException("Connection closed by server");
 
-        // Read length (may be multi-byte)
         int firstLenByte = in.read() & 0xFF;
         int contentLength;
 
         if (firstLenByte < 128) {
-            // Short form length
             contentLength = firstLenByte;
         } else {
-            // Long form length
             int numBytes = firstLenByte & 0x7F;
             contentLength = 0;
             for (int i = 0; i < numBytes; i++) {
@@ -202,7 +303,6 @@ public class LdapConnection {
             }
         }
 
-        // Read the content bytes
         byte[] content = new byte[contentLength];
         int bytesRead = 0;
         while (bytesRead < contentLength) {
@@ -211,30 +311,30 @@ public class LdapConnection {
             bytesRead += r;
         }
 
-        // Reconstruct the full packet including tag and length
-        // We need the full packet for decoding
         byte[] lengthBytes = BerEncoder.encodeLength(contentLength);
         byte[] fullPacket  = new byte[1 + lengthBytes.length + contentLength];
         fullPacket[0]      = (byte) tag;
         System.arraycopy(lengthBytes, 0, fullPacket, 1, lengthBytes.length);
-        System.arraycopy(content, 0, fullPacket,
-            1 + lengthBytes.length, contentLength);
+        System.arraycopy(content, 0, fullPacket, 1 + lengthBytes.length, contentLength);
 
         return fullPacket;
     }
 
     // ----------------------------------------------------------------
-    // MESSAGE ID COUNTER
-    // RFC 4511 Section 4.1.1.1 — messageID must be non-zero
-    // and unique within a session
+    // HELPERS
+    // these are not part of the core LDAP protocol but help with message IDs and logging
     // ----------------------------------------------------------------
-    private int nextMessageId() {
-        return messageId++;
+    private int nextMessageId() { return messageId++; }
+
+    private String operationName(int op) {
+        switch (op) {
+            case BerEncoder.MODIFY_OP_ADD:     return "add";
+            case BerEncoder.MODIFY_OP_DELETE:  return "delete";
+            case BerEncoder.MODIFY_OP_REPLACE: return "replace";
+            default: return "unknown(" + op + ")";
+        }
     }
 
-    // ----------------------------------------------------------------
-    // GETTERS
-    // ----------------------------------------------------------------
     public boolean isConnected() {
         return socket != null && !socket.isClosed() && socket.isConnected();
     }
